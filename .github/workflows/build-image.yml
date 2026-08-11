@@ -52,6 +52,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: false
+          sbom: false
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -59,8 +61,15 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh api --method PATCH user/packages/container/jetpulse \
-            -f visibility=public
+          for attempt in $(seq 1 10); do
+            if gh api --method PATCH user/packages/container/jetpulse \
+              -f visibility=public; then
+              exit 0
+            fi
+            echo "attempt $attempt failed, retrying in 15s..."
+            sleep 15
+          done
+          exit 1
 
       - name: Smoke-test the published image
         run: |
