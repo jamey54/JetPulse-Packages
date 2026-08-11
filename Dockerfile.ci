@@ -1,0 +1,38 @@
+FROM python:3.12-slim-bookworm
+
+# Runtime tools only: openvpn + sudo for the mandatory tunnel, ca-certificates
+# for HTTPS, bash for the run step.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    openvpn \
+    sudo \
+    && rm -rf /var/lib/apt/lists/*
+
+# Runtime Python deps, preinstalled so CI never installs them. camoufox brings
+# playwright in as a dependency, so nothing else needs to be added here.
+COPY requirements.txt /tmp/requirements.txt
+RUN pip install --no-cache-dir -r /tmp/requirements.txt \
+    && rm /tmp/requirements.txt
+
+# Camoufox's patched Firefox needs its system libraries (installed as root).
+RUN python -m playwright install-deps firefox
+
+# Non-root run user matching the GitHub-hosted runner UID (1001) so the
+# workspace mounted from the runner stays writable; passwordless sudo lets
+# vpn.py elevate openvpn via `sudo -n` to create the tun device.
+# The debian /etc/profile drops /usr/sbin from the PATH for non-root login
+# shells, which hides openvpn (/usr/sbin/openvpn); re-add it so `bash -l`
+# (used by the workflows) can find the binary.
+RUN useradd -m -u 1001 -s /bin/bash agent \
+    && echo "agent ALL=(ALL) NOPASSWD:ALL" >> /etc/sudoers \
+    && echo 'export PATH="$PATH:/usr/sbin:/sbin"' > /etc/profile.d/10-container-path.sh
+
+USER agent
+ENV HOME=/home/agent
+ENV PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+WORKDIR /repo
+
+# Pre-fetch the stealth browser into the run user's cache (~/.cache/camoufox).
+ARG FETCH_BROWSER=1
+RUN if [ "$FETCH_BROWSER" = "1" ]; then python -m camoufox fetch; fi
